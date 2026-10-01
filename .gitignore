@@ -1,0 +1,45 @@
+# Environment & Credentials
+.env
+.env.*
+!.env.example
+
+# Telegram Auth Session Files
+*.session
+*.session-journal
+telegram_session*
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Exports & Chat Archives (keep directory structure via .gitkeep)
+exports/*
+!exports/.gitkeep
+!exports/**/.gitkeep
+
+# Obsidian Vault Generated Contents (keep directory structure via .gitkeep)
+Obsidian_Vault/*
+!Obsidian_Vault/.gitkeep
+!Obsidian_Vault/**/.gitkeep
+.obsidian/
+
+# Generated Documents & Binaries
+*.html
+*.pdf
+*.tex
+*.log
+
+# Editor & OS Artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
