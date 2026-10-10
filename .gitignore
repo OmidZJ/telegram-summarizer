@@ -8,6 +8,11 @@
 *.session-journal
 telegram_session*
 
+# Telegram Multi-Account Settings
+telegram_accounts.json
+telegram_accounts*.json
+!telegram_accounts.example.json
+
 # Python Cache & Bytecode
 __pycache__/
 *.py[cod]

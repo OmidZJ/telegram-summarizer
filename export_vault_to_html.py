@@ -56,6 +56,8 @@ def get_category_display(category_raw: str) -> str:
     """Dynamically format directory names into clean, human-readable category titles."""
     if not category_raw or category_raw == "Obsidian_Vault":
         return "فهرست مطالب"
+    if category_raw == "Report_Cluster":
+        return "Report Cluster (گزارش‌های تخصصی)"
     clean = category_raw.replace("_", " ").strip()
     clean = re.sub(r"\bAnd\b", "&", clean)
     return clean
@@ -206,6 +208,15 @@ def preprocess_markdown(text: str, current_note_stem: str) -> str:
     content = re.sub(r"\(((?:\d{4}-\d{2}-\d{2})(?:\s*,\s*\d{4}-\d{2}-\d{2})*)\)", replace_dates, content)
     content = re.sub(r"\*\*\[(\d{4}-\d{2}-\d{2})\]\*\*", r'<span class="date-chip">📅 \1</span>', content)
 
+    # Transform Telegram message links [💬 #12345](https://t.me/...) into stylish pill links
+    def replace_telegram_link(m):
+        raw_num = m.group(1).strip().lstrip("#")
+        url = m.group(2).strip()
+        clean_url = html.escape(url, quote=True)
+        return f'<a href="{clean_url}" target="_blank" rel="noopener noreferrer" class="telegram-msg-link" title="مشاهده پیام اصلی در تلگرام">💬 #{raw_num}</a>'
+
+    content = re.sub(r"\[(?:💬\s*)?#?(\d+)\]\((https?://t\.me/[^\)]+)\)", replace_telegram_link, content)
+
     return content
 
 
@@ -247,7 +258,7 @@ def assign_bidi_direction(html_text: str) -> str:
 
 
 def build_notes_dataset():
-    """Scan Obsidian_Vault and parse all Markdown notes into rich objects."""
+    """Scan Obsidian_Vault and parse all Markdown notes into rich objects supporting Group Clusters."""
     all_notes = []
     vault_notes = list(VAULT_DIR.rglob("*.md"))
 
@@ -261,25 +272,55 @@ def build_notes_dataset():
         raw_text = md_file.read_text(encoding="utf-8", errors="replace")
         meta, body_md = parse_frontmatter(raw_text)
 
+        rel_path = md_file.relative_to(VAULT_DIR)
+
+        # Check hierarchy depth for Group Clusters vs Flat Categories
+        if len(rel_path.parts) >= 3:
+            # Group Cluster / Subcluster / Note.md
+            group_raw = rel_path.parts[0]
+            subcluster_raw = rel_path.parts[1]
+            group_display = get_category_display(group_raw)
+            subcluster_display = get_category_display(subcluster_raw)
+            category_raw = subcluster_raw
+            category_display = f"{group_display} ➔ {subcluster_display}"
+        elif len(rel_path.parts) == 2:
+            # Category / Note.md
+            group_raw = ""
+            group_display = ""
+            subcluster_raw = rel_path.parts[0]
+            subcluster_display = get_category_display(subcluster_raw)
+            category_raw = subcluster_raw
+            category_display = subcluster_display
+        else:
+            # Root note
+            group_raw = ""
+            group_display = ""
+            subcluster_raw = ""
+            subcluster_display = "فهرست مطالب"
+            category_raw = "Map_of_Content"
+            category_display = "فهرست مطالب"
+
         title = meta.get("title") or md_file.stem
-        category_raw = meta.get("category") or md_file.parent.name
-        category_display = get_category_display(category_raw)
 
         is_summary = "(خلاصه شده)" in md_file.stem
-        is_moc = md_file.stem == "00_Map_of_Content"
-        if is_moc and (not title or title == "Second Brain Dashboard"):
-            title = "فهرست مطالب"
+        is_root_moc = (md_file.resolve() == (VAULT_DIR / "00_Map_of_Content.md").resolve())
+        is_moc = is_root_moc
 
-        # Check companions
+        if is_root_moc:
+            title = "فهرست مطالب اصلی"
+        elif md_file.name == "00_Map_of_Content.md" and group_display:
+            title = f"فهرست مطالب: {group_display}"
+
+        # Check companions within the same folder first, then global
         master_stem = None
         summary_stem = None
         if is_summary:
             potential_master = md_file.stem.replace(" (خلاصه شده)", "").strip()
-            if potential_master in notes_by_stem:
+            if (md_file.parent / f"{potential_master}.md").exists() or potential_master in notes_by_stem:
                 master_stem = potential_master
         else:
             potential_summary = f"{md_file.stem} (خلاصه شده)"
-            if potential_summary in notes_by_stem:
+            if (md_file.parent / f"{potential_summary}.md").exists() or potential_summary in notes_by_stem:
                 summary_stem = potential_summary
 
         # Preprocess and render HTML
@@ -300,10 +341,16 @@ def build_notes_dataset():
         # Count bullet points
         bullet_count = sum(1 for line in raw_text.splitlines() if line.strip().startswith("- ") or line.strip().startswith("* "))
 
+        note_slug_id = sanitize_id(f"{group_raw}_{md_file.stem}" if group_raw and md_file.stem.startswith("00_") else md_file.stem)
+
         all_notes.append({
-            "id": sanitize_id(md_file.stem),
+            "id": note_slug_id,
             "stem": md_file.stem,
             "title": title,
+            "group": group_raw,
+            "group_display": group_display,
+            "subcluster": subcluster_raw,
+            "subcluster_display": subcluster_display,
             "category": category_raw,
             "category_display": category_display,
             "is_summary": is_summary,
@@ -321,7 +368,7 @@ def build_notes_dataset():
             "html": rendered_html,
         })
 
-    # Sort notes: MOC first, then by category, then by title
+    # Sort notes: Root MOC first, then by category_display, then by title
     def sort_key(n):
         if n["is_moc"]:
             return ("000", "", "")
@@ -347,6 +394,8 @@ def text_to_latex(text: str) -> str:
         ('}', r'\}'),
         ('~', r'\textasciitilde{}'),
         ('^', r'\textasciicircum{}'),
+        ('➔', r' - '),
+        ('→', r' - '),
     ]
     for orig, repl in replacements:
         text = text.replace(orig, repl)
@@ -354,12 +403,12 @@ def text_to_latex(text: str) -> str:
 
 
 def process_inline_latex(text: str) -> str:
-    """Process inline markdown (bold, italic, code, wikilinks, dates)."""
+    """Process inline markdown (bold, italic, code, wikilinks, dates, external links)."""
     # 1. Protect inline code `code`
     code_tokens = []
     def save_code(m):
         code_tokens.append(m.group(1))
-        return f'%%CODE{len(code_tokens)-1}%%'
+        return f'@@CODE{len(code_tokens)-1}@@'
     text = re.sub(r'`([^`]+)`', save_code, text)
 
     # 2. Protect wikilinks [[Target|Display]] or [[Target]]
@@ -372,24 +421,39 @@ def process_inline_latex(text: str) -> str:
             tgt, disp = raw, raw
         slug = sanitize_id(tgt.strip())
         link_tokens.append((slug, text_to_latex(disp.strip())))
-        return f'%%LINK{len(link_tokens)-1}%%'
+        return f'@@LINK{len(link_tokens)-1}@@'
     text = re.sub(r'\[\[(.*?)\]\]', save_link, text)
 
-    # 3. Escape general text
+    # 3. Protect external markdown links [Display](URL)
+    ext_link_tokens = []
+    def save_ext_link(m):
+        disp = m.group(1).strip()
+        url = m.group(2).strip()
+        disp_clean = disp.replace("💬", "").strip() or "Link"
+        ext_link_tokens.append((url, disp_clean))
+        return f'@@EXTLINK{len(ext_link_tokens)-1}@@'
+    text = re.sub(r'\[([^\]]+)\]\((https?://[^\)]+)\)', save_ext_link, text)
+
+    # 4. Escape general text
     text = text_to_latex(text)
 
-    # 4. Bold & Italic
+    # 5. Bold & Italic
     text = re.sub(r'\*\*(.*?)\*\*', r'\\textbf{\1}', text)
     text = re.sub(r'\*(.*?)\*', r'\\textit{\1}', text)
 
-    # 5. Restore wikilinks as clickable \hyperlink
+    # 6. Restore wikilinks as clickable \hyperlink
     for idx, (slug, disp) in enumerate(link_tokens):
-        text = text.replace(f'%%LINK{idx}%%', f'\\hyperlink{{note:{slug}}}{{{disp}}}')
+        text = text.replace(f'@@LINK{idx}@@', f'\\hyperlink{{note:{slug}}}{{{disp}}}')
 
-    # 6. Restore inline code inside \lr{\texttt{...}}
+    # 7. Restore external links as clickable \href
+    for idx, (url, disp) in enumerate(ext_link_tokens):
+        escaped_disp = text_to_latex(disp)
+        text = text.replace(f'@@EXTLINK{idx}@@', f'\\lr{{\\href{{{url}}}{{\\texttt{{{escaped_disp}}}}}}}')
+
+    # 8. Restore inline code inside \lr{\texttt{...}}
     for idx, c in enumerate(code_tokens):
         escaped_c = text_to_latex(c)
-        text = text.replace(f'%%CODE{idx}%%', f'\\lr{{\\texttt{{{escaped_c}}}}}')
+        text = text.replace(f'@@CODE{idx}@@', f'\\lr{{\\texttt{{{escaped_c}}}}}')
 
     return text
 
@@ -1611,6 +1675,46 @@ def generate_standalone_html(notes):
       box-shadow: 0 2px 6px var(--accent-glow);
     }}
 
+    /* Telegram Source Message Links */
+    .telegram-msg-link {{
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: rgba(36, 161, 222, 0.12);
+      color: #0088cc;
+      border: 1px solid rgba(36, 161, 222, 0.28);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 7px;
+      border-radius: 12px;
+      margin: 0 3px;
+      text-decoration: none;
+      white-space: nowrap;
+      vertical-align: middle;
+      direction: ltr;
+      unicode-bidi: isolate;
+      transition: all var(--transition-fast);
+      cursor: pointer;
+    }}
+    .telegram-msg-link:hover {{
+      background: #0088cc;
+      color: #ffffff;
+      border-color: #0088cc;
+      box-shadow: 0 2px 8px rgba(0, 136, 204, 0.35);
+      transform: translateY(-1px);
+    }}
+    [data-theme="dark"] .telegram-msg-link {{
+      background: rgba(41, 182, 246, 0.16);
+      color: #4fc3f7;
+      border-color: rgba(41, 182, 246, 0.32);
+    }}
+    [data-theme="dark"] .telegram-msg-link:hover {{
+      background: #29b6f6;
+      color: #0f172a;
+      border-color: #29b6f6;
+      box-shadow: 0 2px 10px rgba(41, 182, 246, 0.45);
+    }}
+
     /* Toast Notification */
     .toast {{
       position: fixed;
@@ -2440,10 +2544,16 @@ def generate_standalone_html(notes):
 
         const header = document.createElement("div");
         header.className = "category-header";
+        let iconPrefix = "📁";
+        if (catName.includes("➔")) {{
+          iconPrefix = "🏢";
+        }} else if (catName.includes("Report Cluster")) {{
+          iconPrefix = "📊";
+        }}
         header.innerHTML = `
           <div class="category-title">
             <span class="category-chevron">▼</span>
-            <span>${{catName}}</span>
+            <span>${{iconPrefix}} ${{catName}}</span>
           </div>
           <span class="category-count">${{catNotes.length}}</span>
         `;

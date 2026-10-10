@@ -1,12 +1,14 @@
 # Telegram Summarizer & Obsidian Second Brain
 
-A modular, end-to-end Python toolkit to archive Telegram group and channel discussions, synthesize them into an interconnected **Obsidian Second Brain** using Google Gemini AI, and export everything into a standalone offline interactive HTML & PDF knowledge base.
+A modular, end-to-end Python toolkit to archive Telegram group and channel discussions across multiple accounts, synthesize them into an interconnected **Obsidian Second Brain** using Google Gemini AI, generate targeted research reports, and export everything into a standalone offline interactive HTML & PDF knowledge base.
 
 ---
 
 ## 🚀 Features
 
-### 1. Telegram Message & Group Sync (`main.py`)
+### 1. Multi-Account Telegram Client & Group Sync (`main.py`)
+- **Multi-Account Switching & Management**: Connect and switch seamlessly between multiple Telegram accounts directly from the interactive menu, with isolated session management (`telegram_accounts.json`).
+- **Secure Account Logout**: Invalidate sessions on Telegram servers and cleanly remove local session files on demand.
 - **List Joined Groups & Channels**: View all groups, supergroups, and channels your account has joined, along with group IDs, unread message counts, and sync status.
 - **Sync / Export FULL Group Chat (Auto-Resume)**:
   - **First Run**: Exports the entire message history of the selected group.
@@ -18,17 +20,24 @@ A modular, end-to-end Python toolkit to archive Telegram group and channel discu
 - **Live Real-Time Monitoring**: Stream new incoming messages across all groups live in your terminal with timestamps, sender names, and group titles, with automatic logging to `exports/realtime_live_log.txt`.
 
 ### 2. AI Second Brain Builder (`build_second_brain.py`)
+- **Group Clusters Architecture**: Automatically organizes notes into dedicated group/community subfolders (`Obsidian_Vault/<Group_Cluster>/<Category>/`) with localized Maps of Content and deep wikilinks.
+- **Direct Telegram Message Links**: Every synthesized bullet point contains a direct, clickable deep-link pill (e.g. `[💬 #12345](https://t.me/c/...)`) pointing back to the exact source message in Telegram.
 - **Brain-in-the-Loop Synthesis**: Feeds the current vault catalog to Gemini so newer batches update and enrich existing master notes instead of generating duplicate fragments.
+- **Date Normalization & Range Filtering**: Filter messages by date ranges (`YYYY-MM-DD`, `YYYY-MM`, `YYYY`) to extract only relevant historical periods.
 - **Date-Stamped Information**: Automatically prefixes every fact and tip with `[YYYY-MM-DD]` for clear chronological context.
-- **Incremental Updates**: Detects new messages added to your chat archives and updates existing notes without re-processing older history.
-- **Smart Model Failover**: Gracefully rotates between Gemini model quota pools on rate limits (429) or high-load conditions (503).
-- **Consolidation Engine**: Merges related notes and generates an automatic Map of Content (`00_Map_of_Content.md`) optimized for Obsidian's interactive Graph View.
+- **Smart Model Failover**: Gracefully rotates between candidate Gemini models (`gemini-flash-lite-latest`, `gemini-3.5-flash`, etc.) on rate limits (429) or high-load conditions (503).
+- **Consolidation & Cleanup Suite**: Built-in tools to merge fragmented notes, unify bilingual folder names, clean companion summary notes, and repair broken links.
 
-### 3. Standalone Offline HTML & PDF Exporter (`export_vault_to_html.py`)
+### 3. AI Research & Custom Report Generator
+- **Targeted Knowledge Mining**: Ask complex questions across your entire vault or specific categories.
+- **Structured Report Cluster**: Generates comprehensive, synthesized reports stored in `Obsidian_Vault/Report_Cluster/` with source citations and key takeaways.
+
+### 4. Standalone Offline HTML & PDF Exporter (`export_vault_to_html.py`)
 - **100% Offline Single-File HTML**: Packages your entire Obsidian vault into a self-contained, zero-CDN HTML file with inline styles, search, and navigation.
+- **Group Cluster Navigation**: Hierarchical explorer supporting Group Clusters, subclusters, and category badges.
 - **First-Vocab BiDi Support**: Dynamically handles mixed RTL (Persian, Arabic) and LTR (English) text per paragraph.
 - **Instant Search**: Full-text and tag search (`Ctrl+K`).
-- **LaTeX & PDF Generation**: Generates a unified printable book PDF of your entire knowledge base.
+- **LaTeX & PDF Generation**: Generates a unified printable book PDF with Xepersian font configuration and clickable hyperlinked table of contents.
 
 ---
 
@@ -85,16 +94,19 @@ GEMINI_API_KEY=AIzaSy...
 
 ## 🛠️ Usage
 
-### Step 1: Export Chat History (`main.py`)
+### Step 1: Launch the Interactive Dashboard (`main.py`)
 
-Run the interactive client:
+Run the main client:
 
 ```bash
 python main.py
 ```
 
-1. On first login, Telegram will send a verification code to your Telegram app (or SMS). Enter it in the terminal.
-2. Select **Option 2** to sync a group's full history. The archive will be saved in `exports/synced_chats/`.
+The central menu allows you to:
+1. **Sync / Export Groups**: Sync full message history with auto-resume.
+2. **Manage Accounts**: Add secondary Telegram accounts or switch active profiles.
+3. **Live Monitor**: Stream real-time messages from all joined channels.
+4. **Launch AI Tools**: Direct shortcuts to the Second Brain builder or Custom Report generator.
 
 ### Step 2: Build the Second Brain Knowledge Base (`build_second_brain.py`)
 
@@ -102,10 +114,11 @@ python main.py
 python build_second_brain.py
 ```
 
-1. Select **Option 1** to process a chat archive.
-2. Choose your batch size (default: 800 messages per call — optimal for free quotas).
-3. Notes are generated inside `Obsidian_Vault/` categorized by topic.
-4. You can pause anytime with `Ctrl+C` and resume without losing progress.
+1. Select **Option 1** to process an exported chat archive.
+2. Choose your date range filter (or press Enter for full history).
+3. Set your batch size (default: 800 messages per call — optimal for free quotas).
+4. Notes are automatically organized into `Obsidian_Vault/<Group_Cluster>/`.
+5. Pause anytime with `Ctrl+C` and resume without losing progress.
 
 ### Step 3: Open in Obsidian
 
@@ -120,7 +133,7 @@ python build_second_brain.py
 python export_vault_to_html.py
 ```
 
-Exports a single, self-contained `Second_Brain_Knowledge_Base.html` and TeX/PDF book to `exports/` for easy sharing.
+Exports a single, self-contained `Second_Brain_Knowledge_Base.html` and TeX/PDF book to `exports/` for easy offline reading and sharing.
 
 ---
 
@@ -128,21 +141,22 @@ Exports a single, self-contained `Second_Brain_Knowledge_Base.html` and TeX/PDF 
 
 ```text
 telegram-summarizer/
-├── main.py                   # Telegram MTProto client, chat exporter & live monitor
-├── build_second_brain.py     # Gemini AI knowledge extractor & vault consolidator
-├── export_vault_to_html.py   # Offline HTML & PDF documentation generator
-├── requirements.txt          # Python dependencies
-├── .env.example              # Sample environment configuration
-├── .gitignore                # Git ignore rules for secrets, sessions, & archives
-├── Obsidian_Vault/           # Destination folder for generated Obsidian notes
+├── main.py                         # Multi-account MTProto client, chat exporter & live monitor
+├── build_second_brain.py           # Gemini AI knowledge extractor, cluster organizer & consolidator
+├── export_vault_to_html.py         # Offline HTML & LaTeX/PDF documentation generator
+├── requirements.txt                # Python dependencies
+├── .env.example                    # Sample environment configuration template
+├── telegram_accounts.example.json  # Multi-account configuration template
+├── .gitignore                      # Git ignore rules for secrets, sessions, & archives
+├── Obsidian_Vault/                 # Destination folder for generated Obsidian notes
 └── exports/
-    ├── synced_chats/         # Exported JSON and TXT chat archives
-    └── checkpoints/          # Progress checkpoints for resuming AI batches
+    ├── synced_chats/               # Exported JSON and TXT chat archives
+    └── checkpoints/                # Progress checkpoints for resuming AI batches
 ```
 
 ---
 
 ## 🔒 Security & Privacy
 
-- **Never commit `.env` or `*.session` files**: `.gitignore` is pre-configured to exclude all personal authentication sessions, tokens, and exported chat archives.
+- **Never commit `.env`, `telegram_accounts.json`, or `*.session` files**: `.gitignore` is pre-configured to exclude all personal authentication sessions, tokens, credentials, and exported chat archives.
 - **Zero Cloud Storage**: All raw messages and generated notes remain 100% on your local disk.

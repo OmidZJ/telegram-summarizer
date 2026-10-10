@@ -1,0 +1,23 @@
+{
+  "active_account_id": "account_1",
+  "accounts": {
+    "account_1": {
+      "id": "account_1",
+      "name": "Account 1",
+      "session_name": "telegram_session",
+      "phone": "+1234567890",
+      "api_id": 12345678,
+      "api_hash": "0123456789abcdef0123456789abcdef",
+      "user_title": ""
+    },
+    "account_2": {
+      "id": "account_2",
+      "name": "Account 2",
+      "session_name": "telegram_session_account2",
+      "phone": "",
+      "api_id": 12345678,
+      "api_hash": "0123456789abcdef0123456789abcdef",
+      "user_title": ""
+    }
+  }
+}

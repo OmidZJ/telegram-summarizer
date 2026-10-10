@@ -61,6 +61,263 @@ def get_proxy():
         return None
 
 
+ACCOUNTS_FILE = BASE_DIR / "telegram_accounts.json"
+
+
+class AccountManager:
+    """
+    Manages multiple Telegram accounts, session switching, and logouts.
+    Stores metadata in telegram_accounts.json while keeping sessions in separate .session files.
+    """
+
+    def __init__(self):
+        self.accounts_file = ACCOUNTS_FILE
+        self.data = self._load_data()
+
+    def _load_data(self) -> dict:
+        if self.accounts_file.exists():
+            try:
+                with open(self.accounts_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "accounts" in data and data["accounts"]:
+                        return data
+            except Exception as e:
+                print(f"[!] Warning reading accounts file: {e}")
+
+        # Default initial structure (Account 1 and Account 2)
+        default_api_id = API_ID
+        try:
+            default_api_id = int(default_api_id) if default_api_id else None
+        except Exception:
+            default_api_id = None
+
+        default_api_hash = API_HASH
+        default_phone = PHONE or ""
+
+        initial_data = {
+            "active_account_id": "account_1",
+            "accounts": {
+                "account_1": {
+                    "id": "account_1",
+                    "name": "Account 1",
+                    "session_name": "telegram_session",
+                    "phone": default_phone,
+                    "api_id": default_api_id,
+                    "api_hash": default_api_hash,
+                    "user_title": "",
+                },
+                "account_2": {
+                    "id": "account_2",
+                    "name": "Account 2",
+                    "session_name": "telegram_session_account2",
+                    "phone": os.getenv("TELEGRAM_PHONE_2", ""),
+                    "api_id": default_api_id,
+                    "api_hash": default_api_hash,
+                    "user_title": "",
+                },
+            },
+        }
+        self._write_data(initial_data)
+        return initial_data
+
+    def _write_data(self, data: dict):
+        try:
+            with open(self.accounts_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[!] Error saving accounts file: {e}")
+
+    def save(self):
+        self._write_data(self.data)
+
+    @property
+    def active_account_id(self) -> str:
+        return self.data.get("active_account_id", "account_1")
+
+    def get_active_account(self) -> dict:
+        acc_id = self.active_account_id
+        accounts = self.data.get("accounts", {})
+        if acc_id not in accounts:
+            first_id = next(iter(accounts.keys()), "account_1")
+            self.data["active_account_id"] = first_id
+            self.save()
+            acc_id = first_id
+        return accounts[acc_id]
+
+    def set_active_account(self, account_id: str) -> bool:
+        if account_id in self.data.get("accounts", {}):
+            self.data["active_account_id"] = account_id
+            self.save()
+            return True
+        return False
+
+    def get_all_accounts(self) -> dict:
+        return self.data.get("accounts", {})
+
+    def add_account(self, name: str, phone: str = "", api_id=None, api_hash=None) -> dict:
+        accounts = self.data.setdefault("accounts", {})
+        count = len(accounts) + 1
+        new_id = f"account_{count}"
+        while new_id in accounts:
+            count += 1
+            new_id = f"account_{count}"
+
+        session_name = f"telegram_session_{new_id}"
+        acc_dict = {
+            "id": new_id,
+            "name": name.strip() or f"Account {count}",
+            "session_name": session_name,
+            "phone": phone.strip(),
+            "api_id": api_id or API_ID,
+            "api_hash": api_hash or API_HASH,
+            "user_title": "",
+        }
+        accounts[new_id] = acc_dict
+        self.save()
+        return acc_dict
+
+    def rename_account(self, account_id: str, new_name: str) -> bool:
+        acc = self.data.get("accounts", {}).get(account_id)
+        if acc and new_name.strip():
+            acc["name"] = new_name.strip()
+            self.save()
+            return True
+        return False
+
+    def delete_account(self, account_id: str) -> bool:
+        accounts = self.data.get("accounts", {})
+        if len(accounts) <= 1:
+            print("[!] Cannot delete the only remaining account. At least 1 account is required.")
+            return False
+
+        if account_id not in accounts:
+            return False
+
+        acc = accounts[account_id]
+        session_base = BASE_DIR / acc["session_name"]
+        for ext in (".session", ".session-journal"):
+            sf = Path(f"{session_base}{ext}")
+            if sf.exists():
+                try:
+                    sf.unlink()
+                except Exception:
+                    pass
+
+        del accounts[account_id]
+
+        if self.active_account_id == account_id:
+            self.data["active_account_id"] = next(iter(accounts.keys()))
+
+        self.save()
+        return True
+
+    async def logout_account(self, client, account_id: str) -> bool:
+        acc = self.data.get("accounts", {}).get(account_id)
+        if not acc:
+            return False
+
+        if client and client.is_connected():
+            try:
+                if await client.is_user_authorized():
+                    await client.log_out()
+                    print(f"[✓] Terminated Telegram authorization on servers.")
+            except Exception as e:
+                print(f"[!] Warning during server log_out: {e}")
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
+        await asyncio.sleep(0.5)
+
+        session_base = BASE_DIR / acc["session_name"]
+        for ext in (".session", ".session-journal"):
+            sf = Path(f"{session_base}{ext}")
+            if sf.exists():
+                try:
+                    sf.unlink()
+                    print(f"[✓] Removed local session file: {sf.name}")
+                except Exception as e:
+                    try:
+                        await asyncio.sleep(0.5)
+                        sf.unlink()
+                        print(f"[✓] Removed local session file: {sf.name}")
+                    except Exception:
+                        print(f"[!] Warning deleting {sf.name}: {e}")
+
+        acc["user_title"] = ""
+        acc["phone"] = ""
+        self.save()
+        return True
+
+    async def connect_active_account(self, proxy=None):
+        acc = self.get_active_account()
+        session_path = str(BASE_DIR / acc["session_name"])
+
+        api_id = acc.get("api_id") or API_ID
+        api_hash = acc.get("api_hash") or API_HASH
+        phone = acc.get("phone") or PHONE
+
+        if not api_id or not api_hash:
+            print(f"\n[!] Telegram API Credentials required for '{acc['name']}'.")
+            if not api_id:
+                raw_id = input("Enter TELEGRAM_API_ID: ").strip()
+                try:
+                    api_id = int(raw_id)
+                    acc["api_id"] = api_id
+                except ValueError:
+                    print("[ERROR] API_ID must be an integer.")
+                    return None, None
+            if not api_hash:
+                api_hash = input("Enter TELEGRAM_API_HASH: ").strip()
+                acc["api_hash"] = api_hash
+            self.save()
+
+        try:
+            api_id = int(api_id)
+        except Exception:
+            pass
+
+        client = TelegramClient(session_path, api_id, api_hash, proxy=proxy)
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                print("\n" + "=" * 60)
+                print(f" 🔑 Authentication Required for: {acc['name']}")
+                print("=" * 60)
+                if not phone:
+                    phone = input(f"Enter phone number for {acc['name']} (e.g. +1234567890): ").strip()
+                    acc["phone"] = phone
+                    self.save()
+
+                print(f"Connecting to Telegram with {phone}...")
+                print("Telegram will send a login code to your Telegram app (or via SMS).")
+                await client.start(phone=phone)
+
+            me = await client.get_me()
+            name = f"{me.first_name or ''} {me.last_name or ''}".strip()
+            username = f"@{me.username}" if me.username else "No Username"
+            user_title = f"{name} ({username}) [ID: {me.id}]"
+            acc["user_title"] = user_title
+            if me.phone:
+                acc["phone"] = f"+{me.phone}" if not me.phone.startswith("+") else me.phone
+            self.save()
+
+            print(f"\n[+] Successfully logged in as: {name} ({username}) [ID: {me.id}] - [{acc['name']}]")
+            return client, me
+
+        except KeyboardInterrupt:
+            print(f"\n[*] Login cancelled by user for {acc['name']}.")
+            if client.is_connected():
+                await client.disconnect()
+            return None, None
+        except Exception as e:
+            print(f"\n[!] Error connecting account '{acc['name']}': {e}")
+            if client.is_connected():
+                await client.disconnect()
+            return None, None
+
+
 def get_credentials():
     """Ensure API_ID and API_HASH are present or prompt user."""
     global API_ID, API_HASH, PHONE
@@ -643,21 +900,186 @@ async def handle_live_monitor(client):
         print("[*] Live monitor stopped. Returning to menu.\n")
 
 
-async def main_menu(client):
+async def handle_account_manager(client, account_mgr):
+    """Interactive menu to switch between accounts, add accounts, or manage them."""
+    while True:
+        accounts = account_mgr.get_all_accounts()
+        active_id = account_mgr.active_account_id
+        active_acc = account_mgr.get_active_account()
+
+        print("\n" + "=" * 65)
+        print(" 👥 TELEGRAM ACCOUNT MANAGER")
+        print(f" Currently Active: {active_acc['name']} - {active_acc.get('user_title') or 'Not logged in'}")
+        print("=" * 65)
+
+        acc_list = list(accounts.values())
+        for idx, acc in enumerate(acc_list, 1):
+            is_active = " ⭐ [ACTIVE]" if acc["id"] == active_id else ""
+            status = acc.get("user_title") or ("Configured" if acc.get("phone") else "Not logged in yet")
+            phone_str = f"[{acc.get('phone')}]" if acc.get("phone") else ""
+            print(f" {idx}. {acc['name']} {phone_str} -> {status}{is_active}")
+
+        print("-" * 65)
+        print(" [1-N] Select number to switch active account")
+        print(" [A]   ➕ Add a new Telegram account")
+        print(" [R]   ✏️ Rename an account label")
+        print(" [D]   🗑️ Delete an account from list")
+        print(" [B]   🔙 Back to Main Menu")
+        print("=" * 65)
+
+        sub_choice = input("Enter your choice: ").strip().lower()
+
+        if sub_choice in ("b", "back", "0", ""):
+            return None
+
+        if sub_choice.isdigit():
+            idx = int(sub_choice)
+            if 1 <= idx <= len(acc_list):
+                selected = acc_list[idx - 1]
+                if selected["id"] == active_id:
+                    print(f"\n[*] '{selected['name']}' is ALREADY your active account.")
+                    continue
+                else:
+                    account_mgr.set_active_account(selected["id"])
+                    print(f"\n[+] Active account switched to: '{selected['name']}'!")
+                    return "switch_account"
+            else:
+                print(f"[!] Please enter a number between 1 and {len(acc_list)}.")
+
+        elif sub_choice == "a":
+            switched = await handle_add_account(account_mgr)
+            if switched == "switch_account":
+                return "switch_account"
+
+        elif sub_choice == "r":
+            handle_rename_account(account_mgr)
+
+        elif sub_choice == "d":
+            await handle_delete_account(client, account_mgr)
+
+        else:
+            print("[!] Invalid choice. Please try again.")
+
+
+async def handle_add_account(account_mgr):
+    """Add a new Telegram account configuration."""
+    print("\n" + "=" * 60)
+    print(" ➕ ADD NEW TELEGRAM ACCOUNT")
+    print("=" * 60)
+    default_name = f"Account {len(account_mgr.get_all_accounts()) + 1}"
+    name = input(f"Enter account label/name [Default: {default_name}]: ").strip() or default_name
+    phone = input("Enter phone number (e.g. +1234567890) [optional, can enter later]: ").strip()
+
+    print("\nAPI Credentials:")
+    print("1. Use same API_ID & API_HASH as other accounts (Recommended)")
+    print("2. Enter custom API_ID & API_HASH for this account")
+    cred_choice = input("Select (1-2) [Default: 1]: ").strip()
+
+    custom_id, custom_hash = None, None
+    if cred_choice == "2":
+        try:
+            custom_id = int(input("Enter TELEGRAM_API_ID: ").strip())
+            custom_hash = input("Enter TELEGRAM_API_HASH: ").strip()
+        except Exception:
+            print("[!] Invalid API ID. Defaulting to shared credentials.")
+
+    new_acc = account_mgr.add_account(name, phone=phone, api_id=custom_id, api_hash=custom_hash)
+    print(f"\n[+] Added '{new_acc['name']}' successfully!")
+
+    switch_now = input(f"Do you want to switch to '{new_acc['name']}' right now? (y/n): ").strip().lower()
+    if switch_now in ("y", "yes", "بله", "1"):
+        account_mgr.set_active_account(new_acc["id"])
+        return "switch_account"
+    return None
+
+
+def handle_rename_account(account_mgr):
+    """Rename an account's display label."""
+    accounts = list(account_mgr.get_all_accounts().values())
+    print("\nSelect account to rename:")
+    for idx, acc in enumerate(accounts, 1):
+        print(f" {idx}. {acc['name']}")
+
+    choice = input(f"Choose account (1-{len(accounts)}) or 0 to cancel: ").strip()
+    if choice.isdigit() and 1 <= int(choice) <= len(accounts):
+        target = accounts[int(choice) - 1]
+        new_name = input(f"Enter new label for '{target['name']}': ").strip()
+        if new_name:
+            account_mgr.rename_account(target["id"], new_name)
+            print(f"[✓] Renamed to '{new_name}'.")
+
+
+async def handle_delete_account(client, account_mgr):
+    """Remove an account configuration and optional session file."""
+    accounts = list(account_mgr.get_all_accounts().values())
+    if len(accounts) <= 1:
+        print("[!] You only have 1 account. At least 1 account must remain.")
+        return
+
+    print("\nSelect account to delete from list:")
+    for idx, acc in enumerate(accounts, 1):
+        active_tag = " (Currently Active)" if acc["id"] == account_mgr.active_account_id else ""
+        print(f" {idx}. {acc['name']}{active_tag}")
+
+    choice = input(f"Choose account to delete (1-{len(accounts)}) or 0 to cancel: ").strip()
+    if choice.isdigit() and 1 <= int(choice) <= len(accounts):
+        target = accounts[int(choice) - 1]
+        confirm = input(f"Are you sure you want to delete '{target['name']}' and its session? (yes/no): ").strip().lower()
+        if confirm in ("y", "yes", "بله", "1"):
+            if target["id"] == account_mgr.active_account_id and client and client.is_connected():
+                await client.disconnect()
+            account_mgr.delete_account(target["id"])
+            print(f"[✓] Deleted account '{target['name']}'.")
+
+
+async def handle_logout(client, account_mgr):
+    """Log out of the current active Telegram account."""
+    active_acc = account_mgr.get_active_account()
+    user_info = active_acc.get("user_title") or active_acc.get("phone") or active_acc["name"]
+
+    print("\n" + "=" * 60)
+    print(" 🚪 LOG OUT TELEGRAM ACCOUNT")
+    print(f" Active Account: {active_acc['name']} ({user_info})")
+    print("=" * 60)
+    print("Warning: Logging out will terminate this authorization session on")
+    print("Telegram servers and remove local session files.")
+    print("You will need to re-verify via SMS/Telegram code to log in again.")
+    print("-" * 60)
+
+    confirm = input(f"Are you sure you want to log out from '{active_acc['name']}'? (yes/no): ").strip().lower()
+    if confirm in ("y", "yes", "بله", "1"):
+        success = await account_mgr.logout_account(client, active_acc["id"])
+        if success:
+            print(f"\n[+] Successfully logged out of '{active_acc['name']}'.")
+            return "logged_out"
+    else:
+        print("[*] Log out cancelled.")
+    return None
+
+
+async def main_menu(client, account_mgr):
     """Display interactive menu options."""
     while True:
-        print("\n" + "=" * 55)
-        print(" Telegram Account Reader & Group Summarizer")
-        print("=" * 55)
+        active_acc = account_mgr.get_active_account()
+        user_info = active_acc.get("user_title") or active_acc.get("phone") or "Connected"
+
+        print("\n" + "=" * 65)
+        print(" 📱 Telegram Account Reader & Group Summarizer")
+        print(f" [👤 Active Account: {active_acc['name']} -> {user_info}]")
+        print("=" * 65)
         print("1. List all joined groups & channels")
         print("2. Sync / Export FULL group chat (auto-resume new messages)")
         print("3. Quick export recent messages from a group (custom limit)")
         print("4. Batch export recent messages from ALL groups")
         print("5. Start real-time live group message monitor")
-        print("6. Exit")
-        print("=" * 55)
+        print("6. AI Research & Report Generator (Ask notes -> Report Cluster)")
+        print("7. Launch Obsidian Second Brain Builder & Consolidator")
+        print(f"8. 👥 Switch / Manage Telegram Accounts (Active: {active_acc['name']})")
+        print(f"9. 🚪 Log Out from Current Account ({active_acc['name']})")
+        print("10. Exit")
+        print("=" * 65)
 
-        choice = input("Select an option (1-6): ").strip()
+        choice = input("Select an option (1-10): ").strip()
 
         if choice == "1":
             await list_groups(client)
@@ -670,34 +1092,87 @@ async def main_menu(client):
         elif choice == "5":
             await handle_live_monitor(client)
         elif choice == "6":
+            try:
+                from build_second_brain import generate_custom_report, VAULT_DIR
+                generate_custom_report(VAULT_DIR)
+            except Exception as e:
+                print(f"[!] Error launching report generator: {e}")
+        elif choice == "7":
+            try:
+                from build_second_brain import main as launch_second_brain
+                launch_second_brain()
+            except Exception as e:
+                print(f"[!] Error launching Second Brain: {e}")
+        elif choice == "8":
+            res = await handle_account_manager(client, account_mgr)
+            if res == "switch_account":
+                return "switch_account"
+        elif choice == "9":
+            res = await handle_logout(client, account_mgr)
+            if res == "logged_out":
+                return "logged_out"
+        elif choice in ("10", "0", "exit", "q"):
             print("\nExiting. Goodbye!")
-            break
+            return "exit"
         else:
-            print("[!] Invalid choice. Please enter a number between 1 and 6.")
+            print("[!] Invalid choice. Please enter a number between 1 and 10.")
 
 
 async def main():
-    api_id, api_hash, phone = get_credentials()
+    account_mgr = AccountManager()
     proxy = get_proxy()
 
-    print("\nConnecting to Telegram...")
-    client = TelegramClient(SESSION_NAME, api_id, api_hash, proxy=proxy)
+    while True:
+        active_acc = account_mgr.get_active_account()
+        print("\n" + "=" * 60)
+        print(f" Connecting to Telegram [{active_acc['name']}]...")
+        print("=" * 60)
 
-    try:
-        # start() prompts for code / 2FA in terminal if logging in for the first time
-        await client.start(phone=phone)
-        me = await client.get_me()
-        print(f"\n[+] Successfully logged in as: {me.first_name} (@{me.username or 'No Username'}) [ID: {me.id}]")
-        
-        await main_menu(client)
-    except KeyboardInterrupt:
-        print("\nProgram interrupted by user.")
-    except Exception as e:
-        print(f"\n[!] Unexpected error: {e}")
-    finally:
-        if client.is_connected():
-            await client.disconnect()
-            print("[*] Disconnected from Telegram.")
+        client, me = await account_mgr.connect_active_account(proxy=proxy)
+        if not client:
+            print("\n[!] Could not connect to active account.")
+            print("1. Open Account Manager (switch account)")
+            print("2. Retry connecting")
+            print("3. Exit")
+            retry_choice = input("Select (1-3): ").strip()
+            if retry_choice == "1":
+                res = await handle_account_manager(None, account_mgr)
+                continue
+            elif retry_choice == "2":
+                continue
+            else:
+                break
+
+        try:
+            action = await main_menu(client, account_mgr)
+            if action == "exit":
+                break
+            elif action == "switch_account":
+                if client.is_connected():
+                    await client.disconnect()
+                continue
+            elif action == "logged_out":
+                if client.is_connected():
+                    await client.disconnect()
+                # Check other accounts
+                other_accounts = [a for a in account_mgr.get_all_accounts().values() if a["id"] != active_acc["id"]]
+                if other_accounts:
+                    next_acc = other_accounts[0]
+                    switch_other = input(f"\nWould you like to switch to '{next_acc['name']}'? (y/n): ").strip().lower()
+                    if switch_other in ("y", "yes", "بله", "1"):
+                        account_mgr.set_active_account(next_acc["id"])
+                continue
+
+        except KeyboardInterrupt:
+            print("\nProgram interrupted by user.")
+            break
+        except Exception as e:
+            print(f"\n[!] Unexpected error: {e}")
+            break
+        finally:
+            if client and client.is_connected():
+                await client.disconnect()
+                print("[*] Disconnected from Telegram.")
 
 
 if __name__ == "__main__":
